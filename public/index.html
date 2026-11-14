@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>تماس صوتی Codex</title>
+  <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#101827;color:#ecf3ff;font:16px system-ui}main{width:min(28rem,90vw);padding:2rem;border:1px solid #31445e;border-radius:1rem;background:#172235}button{width:100%;padding:1rem;border:0;border-radius:.7rem;background:#4f8cff;color:white;font:inherit;font-weight:700}p{line-height:1.8;color:#b7c7dd}.on{color:#79e3a5}.err{color:#ff9c9c}</style>
+</head>
+<body><main><h1>تماس صوتی Codex</h1><p id="status">برای شروع، رمز خصوصی را وارد کن.</p><button id="call">شروع تماس</button></main>
+<script type="module">
+const status = document.querySelector('#status'); const button = document.querySelector('#call');
+let context, nextPlayAt = 0, socket;
+const base64 = bytes => { let out=''; for(const b of bytes) out+=String.fromCharCode(b); return btoa(out); };
+const fromBase64 = text => Uint8Array.from(atob(text), c=>c.charCodeAt(0));
+function sayState(text, cls='') { status.textContent=text; status.className=cls; }
+function playPcm(base64, sampleRate) {
+  const data=fromBase64(base64); const pcm=new Int16Array(data.buffer); const buffer=context.createBuffer(1,pcm.length,sampleRate); const channel=buffer.getChannelData(0);
+  for(let i=0;i<pcm.length;i++) channel[i]=pcm[i]/32768;
+  const source=context.createBufferSource(); source.buffer=buffer; source.connect(context.destination); nextPlayAt=Math.max(nextPlayAt,context.currentTime); source.start(nextPlayAt); nextPlayAt+=buffer.duration;
+}
+button.onclick=async()=>{
+  const token=prompt('رمز خصوصی اتصال را وارد کن'); if(!token) return;
+  context=new AudioContext(); const stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
+  const url=`${location.protocol==='https:'?'wss':'ws'}://${location.host}/voice?token=${encodeURIComponent(token)}`;
+  socket=new WebSocket(url); socket.onopen=()=>{socket.send(JSON.stringify({type:'start'})); sayState('در حال وصل‌شدن…');};
+  socket.onmessage=event=>{const message=JSON.parse(event.data); if(message.type==='ready') sayState(message.writeEnabled?'وصل شد؛ امکان تغییر فایل فعال است.':'وصل شد؛ حالت فقط‌خواندنی فعال است.','on'); if(message.type==='audio') playPcm(message.data,message.sampleRate); if(message.type==='error') sayState(message.message,'err');};
+  socket.onclose=()=>sayState('تماس پایان یافت.'); socket.onerror=()=>sayState('اتصال برقرار نشد.','err');
+  const source=context.createMediaStreamSource(stream); const processor=context.createScriptProcessor(2048,1,1); source.connect(processor); processor.connect(context.destination);
+  processor.onaudioprocess=e=>{if(socket?.readyState!==WebSocket.OPEN)return; const input=e.inputBuffer.getChannelData(0), rate=context.sampleRate, ratio=rate/16000, count=Math.floor(input.length/ratio), pcm=new Int16Array(count); for(let i=0;i<count;i++)pcm[i]=Math.max(-1,Math.min(1,input[Math.floor(i*ratio)]))*32767; socket.send(JSON.stringify({type:'audio',data:base64(new Uint8Array(pcm.buffer))}));};
+  button.disabled=true;
+};
+</script></body></html>
